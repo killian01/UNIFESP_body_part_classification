@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torchvision
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -26,8 +27,6 @@ class bodyPartClassifier(object):
         # initialize valid_loss_min from checkpoint to valid_loss_min
         valid_loss_min = checkpoint['valid_loss_min']
 
-    
-
     def save_ckp(self, state, is_best, checkpoint_path, best_model_path):
         """
         state: checkpoint we want to save
@@ -43,9 +42,6 @@ class bodyPartClassifier(object):
             best_fpath = best_model_path
             # copy that checkpoint file to best path given, best_model_path
             shutil.copyfile(f_path, best_fpath)
-        
-
-    
 
     def get_heatmap(self, pred, best_pred, img):
         # get the gradient of the output with respect to the parameters of the model
@@ -112,7 +108,6 @@ class bodyPartClassifier(object):
         #plt.show()
 
         return im_rgb
-
 
     def train_epoch(self, train_dataloader, loss_fn, device):
         losses = []
@@ -264,19 +259,17 @@ class bodyPartClassifier(object):
             accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
 
         return bad_class_pred, bad_class_labels, bad_class_images, predictions, predicted_label, labels_list, accuracy
-    
-    
-    
-    #Multi-labels functions
-    def train_epoch_multi(self, train_dataloader, loss_fn, device):
+
+    def train_epoch_multi_labels(self, train_dataloader, loss_fn, device):
         losses = []
         correct_predictions = 0
-        for data, labels, path in train_dataloader:
+        for data, labels, path in tqdm(train_dataloader):
                 data = data.to(device)
                 labels = labels.to(device)
                 labels = labels.to(torch.float32)
                 self._optimizer.zero_grad()
                 output = self._model(data.float())
+
                 loss = loss_fn(output, labels)
                 loss.backward()
                 self._optimizer.step()
@@ -289,7 +282,7 @@ class bodyPartClassifier(object):
         mean_loss = np.array(losses).mean()
         return accuracy, mean_loss
 
-    def evaluate_multi(self, dataloader, loss_fn, device):
+    def evaluate_multi_labels(self, dataloader, loss_fn, device):
         losses = []
         correct_predictions = 0
         predictions = []
@@ -297,7 +290,7 @@ class bodyPartClassifier(object):
         labels_list = []
 
         with torch.no_grad():
-            for images, labels, path in dataloader:
+            for images, labels, path in tqdm(dataloader):
                 images = images.to(device)
                 labels = labels.to(device)
                 labels = labels.to(torch.float32)
@@ -314,7 +307,7 @@ class bodyPartClassifier(object):
         accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
         return accuracy, mean_loss
 
-    def train_multi(self, start_epochs, valid_loss_min_input, checkpoint_path, bestmodel_path, train_dataloader, validation_dataloader, n_epochs, loss_fn=nn.BCELoss(), device=torch.device('cuda')):
+    def train_multi_labels(self, start_epochs, valid_loss_min_input, checkpoint_path, bestmodel_path, train_dataloader, validation_dataloader, n_epochs, loss_fn=nn.BCELoss(), device=torch.device('cuda')):
 
         train_losses = []
         val_losses = []
@@ -324,14 +317,14 @@ class bodyPartClassifier(object):
 
         count = 0
         stop_criterion = 5
-        for epoch in range(start_epochs, n_epochs):
+        for epoch in tqdm(range(start_epochs, n_epochs)):
             self._model.train()
-            train_accuracy, train_loss = self.train_epoch_multi(train_dataloader, loss_fn, device)
+            train_accuracy, train_loss = self.train_epoch_multi_labels(train_dataloader, loss_fn, device)
             train_accuracies.append(train_accuracy)
             train_losses.append(train_loss)
 
             self._model.eval()
-            val_accuracy, val_loss = self.evaluate_multi(validation_dataloader, loss_fn, device)
+            val_accuracy, val_loss = self.evaluate_multi_labels(validation_dataloader, loss_fn, device)
             val_accuracies.append(val_accuracy)
             val_losses.append(val_loss)
 
@@ -368,10 +361,8 @@ class bodyPartClassifier(object):
                 epoch = start_epochs    
 
         return train_losses, val_losses, train_accuracies, val_accuracies, epoch+1
-    
 
-    
-    def predict_multi(self, dataloader, device):
+    def predict_multi_labels(self, dataloader, device):
         output_image = []
         predicted_label_list = []
         label_list = []
@@ -404,419 +395,3 @@ class bodyPartClassifier(object):
             accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
 
         return predictions, predicted_label, labels_list, accuracy
-    
-    
-
-    #MIL functions
-    def train_epoch_MIL(self, trained_model, dataloader, loss_fn, device):
-        losses = []
-        correct_predictions = 0
-        for images, labels, patient in (dataloader): 
-            img_max = 17
-            feature_vector = np.zeros((1, img_max*2048))
-
-            with torch.no_grad():
-                trained_model._model.eval()
-                for i in range(len(images)):      
-                    img = images[i].to(device)
-                    output = trained_model._model.get_feature_vector(img)
-                    feature_vector[0, i*2048:(i+1)*2048] = output.cpu().numpy()
-                    del output
-            
-            feature_vector = torch.tensor(feature_vector)
-            data = feature_vector.to(device)
-            labels = labels.to(device)
-            self._optimizer.zero_grad()
-            output = self._model(data.float())
-            loss = loss_fn(output, labels)
-            loss.backward()
-            self._optimizer.step()
-            losses.append(loss.item())
-            predicted_labels = output.argmax(dim=1)
-            correct_predictions += (predicted_labels == labels).sum().item()
-            del output
-            del feature_vector
-            del data
-            del labels
-            del loss
-            
-        accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
-        mean_loss = np.array(losses).mean()
-        
-        return accuracy, mean_loss
-
-    def evaluate_MIL(self, trained_model, dataloader, loss_fn, device):
-        losses = []
-        correct_predictions = 0
-        predictions = []
-        predicted_label = []
-        labels_list = []
-
-        for images, labels, patient in (dataloader): 
-            img_max = 17
-            feature_vector = np.zeros((1, img_max*2048))
-            with torch.no_grad():
-                trained_model._model.eval()
-                for i in range(len(images)):      
-                    img = images[i].to(device)
-                    output = trained_model._model.get_feature_vector(img)
-                    feature_vector[0, i*2048:(i+1)*2048] = output.cpu().numpy()
-                    del output
-
-            with torch.no_grad():
-                feature_vector = torch.tensor(feature_vector)
-                data = feature_vector.to(device)
-                labels = labels.to(device)
-                output = self._model(data.float())
-                loss = loss_fn(output, labels)
-                losses.append(loss.item())
-                predicted_labels = output.argmax(dim=1)
-                correct_predictions += (predicted_labels == labels).sum().item()
-                del output
-                del feature_vector
-                del data
-                del labels
-                del loss
-
-        mean_loss = np.array(losses).mean()
-        accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
-        return accuracy, mean_loss
-
-    def train_MIL(self, trained_model, start_epochs, valid_loss_min_input, checkpoint_path, bestmodel_path, train_dataloader, validation_dataloader, n_epochs, loss_fn=nn.CrossEntropyLoss(), device=torch.device('cuda')):
-
-        train_losses = []
-        val_losses = []
-        train_accuracies = []
-        val_accuracies = []
-        valid_loss_min = valid_loss_min_input
-
-        count = 0
-        stop_criterion = 5
-        for epoch in range(start_epochs, n_epochs):
-            self._model.train()
-            train_accuracy, train_loss = self.train_epoch_MIL(trained_model, train_dataloader, loss_fn, device)
-            train_accuracies.append(train_accuracy)
-            train_losses.append(train_loss)
-
-            self._model.eval()
-            val_accuracy, val_loss = self.evaluate_MIL(trained_model, validation_dataloader, loss_fn, device)
-            val_accuracies.append(val_accuracy)
-            val_losses.append(val_loss)
-
-            print('Epoch {}, train_loss: {}, train_accuracy: {}, validation_loss: {}, validation_accuracy: {}'.format(epoch+1, train_loss, train_accuracy, val_loss, val_accuracy))
-
-            # create checkpoint variable and add important data
-            checkpoint = {
-                'epoch': epoch + 1,
-                'valid_loss_min': val_loss,
-                'state_dict': self._model.state_dict(),
-                'optimizer': self._optimizer.state_dict(),
-                #test
-                'train_losses': train_losses,
-                'val_losses': val_losses,
-                'train_accuracies': train_accuracies,
-                'val_accuracies': val_accuracies,
-                }
-            # save checkpoint
-            self.save_ckp(checkpoint, False, checkpoint_path, bestmodel_path)
-
-            # save the model if validation loss has decreased
-            if np.round(val_loss,3) < np.round(valid_loss_min, 3):
-                print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(valid_loss_min,val_loss))
-                # save checkpoint as best model
-                self.save_ckp(checkpoint, True, checkpoint_path, bestmodel_path)
-                valid_loss_min = val_loss
-                count = 0
-            else:
-                count += 1
-                if count == stop_criterion:
-                    print('No improvement for {} epochs; training stopped.'.format(stop_criterion))
-                    break
-            if start_epochs == n_epochs:
-                epoch = start_epochs    
-
-        return train_losses, val_losses, train_accuracies, val_accuracies, epoch+1
-    
-
-    
-    def predict_MIL(self, trained_model, dataloader, device):
-        output_image = []
-        predicted_label_list = []
-        label_list = []
-        path_list = []
-
-
-        bad_class_images = []
-        bad_class_labels = []
-        bad_class_pred = []
-
-
-        predictions = []
-        predicted_label = []
-        labels_list = []
-
-        correct_predictions = 0
-
-        self._model.eval()
-        
-        for images, labels, patient in (dataloader): 
-            img_max = 17
-            feature_vector = np.zeros((1, img_max*2048))
-            with torch.no_grad():
-                trained_model._model.eval()
-                for i in range(len(images)):      
-                    img = images[i].to(device)
-                    output = trained_model._model.get_feature_vector(img)
-                    feature_vector[0, i*2048:(i+1)*2048] = output.cpu().numpy()
-                    del output
-
-            with torch.no_grad():
-                feature_vector = torch.tensor(feature_vector)
-                data = feature_vector.to(device)
-                labels = labels.to(device)
-                output = self._model(data.float())
-                predicted_labels = output.argmax(dim=1)
-                correct_predictions += (predicted_labels == labels).sum().item()
-                
-                if predicted_labels != labels:
-                    bad_class_images.append(data.data.cpu().numpy())
-                    bad_class_labels.append(labels.data.cpu().item())
-                    bad_class_pred.append(predicted_labels.data.cpu().item())
-
-
-                out = nn.functional.softmax(output, dim=1)
-                predictions.append(out.data.cpu().numpy())
-                predicted_label.append(predicted_labels.cpu().item())
-                labels_list.append(labels.data.cpu().item())
-
-                del output
-                del feature_vector
-                del data
-                del labels
-
-        accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
-
-        return bad_class_pred, bad_class_labels, bad_class_images, predictions, predicted_label, labels_list, accuracy
-            
-
-        
-        
-    #Functions to train and evaluate a linear model with 2 features vector
-    def train_epoch_2_instances(self, break_model_trained, RD_model_trained, dataloader, loss_fn, device):
-        losses = []
-        correct_predictions = 0
-        for images, labels, patient in (dataloader): 
-            feature_vector = np.zeros((1, 4096))
-            img = images.to(device)
-            
-#             with torch.no_grad():
-#                 trained_model._model.eval()
-#                 for i in range(len(images)):      
-#                     img = images[i].to(device)
-#                     output = trained_model._model.get_feature_vector(img)
-#                     feature_vector[0, i*2048:(i+1)*2048] = output.cpu().numpy()
-#                     del output
-
-            with torch.no_grad():
-                break_model_trained._model.eval()
-                RD_model_trained._model.eval()
-                break_features = break_model_trained._model.get_feature_vector(img)
-                RD_features = RD_model_trained._model.get_feature_vector(img)
-                feature_vector[0, 0:2048] = break_features.cpu().numpy()
-                feature_vector[0, 2048:4096] = RD_features.cpu().numpy()
-                del break_features
-                del RD_features
-            
-            feature_vector = torch.tensor(feature_vector)
-            data = feature_vector.to(device)
-            labels = labels.to(device)
-            self._optimizer.zero_grad()
-            output = self._model(data.float())
-            loss = loss_fn(output, labels)
-            loss.backward()
-            self._optimizer.step()
-            losses.append(loss.item())
-            predicted_labels = output.argmax(dim=1)
-            correct_predictions += (predicted_labels == labels).sum().item()
-            del output
-            del feature_vector
-            del data
-            del labels
-            del loss
-            
-        accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
-        mean_loss = np.array(losses).mean()
-        
-        return accuracy, mean_loss
-
-    def evaluate_2_instances(self, break_model_trained, RD_model_trained, dataloader, loss_fn, device):
-        losses = []
-        correct_predictions = 0
-        predictions = []
-        predicted_label = []
-        labels_list = []
-
-        break_model_trained._model.eval()
-        RD_model_trained._model.eval()
-        for images, labels, patient in (dataloader): 
-            feature_vector = np.zeros((1, 4096))
-            img = images.to(device)
-#             with torch.no_grad():
-#                 trained_model._model.eval()
-#                 for i in range(len(images)):      
-#                     img = images[i].to(device)
-#                     output = trained_model._model.get_feature_vector(img)
-#                     feature_vector[0, i*2048:(i+1)*2048] = output.cpu().numpy()
-#                     del output
-            with torch.no_grad():
-                break_features = break_model_trained._model.get_feature_vector(img)
-                RD_features = RD_model_trained._model.get_feature_vector(img)
-
-                feature_vector[0, 0:2048] = break_features.cpu().numpy()
-                feature_vector[0, 2048:4096] = RD_features.cpu().numpy()
-                del break_features
-                del RD_features
-
-
-            with torch.no_grad():
-                feature_vector = torch.tensor(feature_vector)
-                data = feature_vector.to(device)
-                labels = labels.to(device)
-                output = self._model(data.float())
-                loss = loss_fn(output, labels)
-                losses.append(loss.item())
-                predicted_labels = output.argmax(dim=1)
-                correct_predictions += (predicted_labels == labels).sum().item()
-                del output
-                del feature_vector
-                del data
-                del labels
-                del loss
-
-        mean_loss = np.array(losses).mean()
-        accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
-        return accuracy, mean_loss
-
-    def train_2_instances(self, break_model_trained, RD_model_trained, start_epochs, valid_loss_min_input, checkpoint_path, bestmodel_path, train_dataloader, validation_dataloader, n_epochs, loss_fn=nn.CrossEntropyLoss(), device=torch.device('cuda')):
-
-        train_losses = []
-        val_losses = []
-        train_accuracies = []
-        val_accuracies = []
-        valid_loss_min = valid_loss_min_input
-
-        count = 0
-        stop_criterion = 5
-        for epoch in range(start_epochs, n_epochs):
-            self._model.train()
-            train_accuracy, train_loss = self.train_epoch_2_instances(break_model_trained, RD_model_trained, train_dataloader, loss_fn, device)
-            train_accuracies.append(train_accuracy)
-            train_losses.append(train_loss)
-
-            self._model.eval()
-            val_accuracy, val_loss = self.evaluate_2_instances(break_model_trained, RD_model_trained, validation_dataloader, loss_fn, device)
-            val_accuracies.append(val_accuracy)
-            val_losses.append(val_loss)
-
-            print('Epoch {}, train_loss: {}, train_accuracy: {}, validation_loss: {}, validation_accuracy: {}'.format(epoch+1, train_loss, train_accuracy, val_loss, val_accuracy))
-
-            # create checkpoint variable and add important data
-            checkpoint = {
-                'epoch': epoch + 1,
-                'valid_loss_min': val_loss,
-                'state_dict': self._model.state_dict(),
-                'optimizer': self._optimizer.state_dict(),
-                #test
-                'train_losses': train_losses,
-                'val_losses': val_losses,
-                'train_accuracies': train_accuracies,
-                'val_accuracies': val_accuracies,
-                }
-            # save checkpoint
-            self.save_ckp(checkpoint, False, checkpoint_path, bestmodel_path)
-
-            # save the model if validation loss has decreased
-            if np.round(val_loss,3) < np.round(valid_loss_min, 3):
-                print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(valid_loss_min,val_loss))
-                # save checkpoint as best model
-                self.save_ckp(checkpoint, True, checkpoint_path, bestmodel_path)
-                valid_loss_min = val_loss
-                count = 0
-            else:
-                count += 1
-                if count == stop_criterion:
-                    print('No improvement for {} epochs; training stopped.'.format(stop_criterion))
-                    break
-            if start_epochs == n_epochs:
-                epoch = start_epochs    
-
-        return train_losses, val_losses, train_accuracies, val_accuracies, epoch+1
-    
-
-    
-    def predict_2_instances(self, break_model_trained, RD_model_trained, dataloader, device):
-        output_image = []
-        predicted_label_list = []
-        label_list = []
-        path_list = []
-
-
-        bad_class_images = []
-        bad_class_labels = []
-        bad_class_pred = []
-
-
-        predictions = []
-        predicted_label = []
-        labels_list = []
-
-        correct_predictions = 0
-
-
-        self._model.eval()
-        for images, labels, patient in (dataloader): 
-            feature_vector = np.zeros((1, 4096))
-            img = images.to(device)
-            with torch.no_grad():
-                break_model_trained._model.eval()
-                RD_model_trained._model.eval()
-#                 for i in range(len(images)):      
-#                     img = images[i].to(device)
-#                     output = trained_model._model.get_feature_vector(img)
-#                     feature_vector[0, i*2048:(i+1)*2048] = output.cpu().numpy()
-#                     del output
-                break_features = break_model_trained._model.get_feature_vector(img)
-                RD_features = RD_model_trained._model.get_feature_vector(img)
-
-                feature_vector[0, 0:2048] = break_features.cpu().numpy()
-                feature_vector[0, 2048:4096] = RD_features.cpu().numpy()
-                del break_features
-                del RD_features
-                
-            with torch.no_grad():
-                feature_vector = torch.tensor(feature_vector)
-                data = feature_vector.to(device)
-                labels = labels.to(device)
-                output = self._model(data.float())
-                predicted_labels = output.argmax(dim=1)
-                correct_predictions += (predicted_labels == labels).sum().item()
-                
-                if predicted_labels != labels:
-                    bad_class_images.append(data.data.cpu().numpy())
-                    bad_class_labels.append(labels.data.cpu().item())
-                    bad_class_pred.append(predicted_labels.data.cpu().item())
-
-
-                out = nn.functional.softmax(output, dim=1)
-                predictions.append(out.data.cpu().numpy())
-                predicted_label.append(predicted_labels.cpu().item())
-                labels_list.append(labels.data.cpu().item())
-
-                del output
-                del feature_vector
-                del data
-                del labels
-
-        accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
-
-        return bad_class_pred, bad_class_labels, bad_class_images, predictions, predicted_label, labels_list, accuracy
