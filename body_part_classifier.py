@@ -301,13 +301,12 @@ class bodyPartClassifier(object):
                 corr_pred_list = [1 if (predicted_labels[i, :] == labels[i,:]).all() else 0 for i in range(labels.shape[0])]
                 correct_predictions += np.sum(corr_pred_list)
                 losses.append(loss.item())
-
-
         mean_loss = np.array(losses).mean()
         accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
         return accuracy, mean_loss
 
-    def train_multi_labels(self, start_epochs, valid_loss_min_input, checkpoint_path, bestmodel_path, train_dataloader, validation_dataloader, n_epochs, loss_fn=nn.BCELoss(), device=torch.device('cuda')):
+    def train_multi_labels(self, start_epochs, valid_loss_min_input, checkpoint_path, bestmodel_path, train_dataloader,
+                           validation_dataloader, n_epochs, stop_criterion, loss_fn=nn.BCELoss(), device=torch.device('cuda')):
 
         train_losses = []
         val_losses = []
@@ -316,7 +315,7 @@ class bodyPartClassifier(object):
         valid_loss_min = valid_loss_min_input
 
         count = 0
-        stop_criterion = 5
+        # stop_criterion = 5
         for epoch in tqdm(range(start_epochs, n_epochs)):
             self._model.train()
             train_accuracy, train_loss = self.train_epoch_multi_labels(train_dataloader, loss_fn, device)
@@ -328,7 +327,8 @@ class bodyPartClassifier(object):
             val_accuracies.append(val_accuracy)
             val_losses.append(val_loss)
 
-            print('Epoch {}, train_loss: {}, train_accuracy: {}, validation_loss: {}, validation_accuracy: {}'.format(epoch+1, train_loss, train_accuracy, val_loss, val_accuracy))
+            print('Epoch {}, train_loss: {}, train_accuracy: {}, validation_loss: {}, validation_accuracy: {}'
+                  .format(epoch+1, train_loss, train_accuracy, val_loss, val_accuracy))
 
             # create checkpoint variable and add important data
             checkpoint = {
@@ -357,41 +357,31 @@ class bodyPartClassifier(object):
                 if count == stop_criterion:
                     print('No improvement for {} epochs; training stopped.'.format(stop_criterion))
                     break
-            if start_epochs == n_epochs:
-                epoch = start_epochs    
+            # if start_epochs == n_epochs:
+            #     epoch = start_epochs
 
         return train_losses, val_losses, train_accuracies, val_accuracies, epoch+1
 
     def predict_multi_labels(self, dataloader, device):
-        output_image = []
-        predicted_label_list = []
-        label_list = []
-        path_list = []
-
         predictions = []
         predicted_label = []
         labels_list = []
 
-        correct_predictions = 0
-
         self._model.eval()
         count = 0
         with torch.no_grad():
-            for images, labels, path in dataloader:
+            for images, labels, path in tqdm(dataloader):
                 images = images.to(device)
                 labels = labels.to(device)
                 output = self._model(images)
                 
-                predicted_labels = output.round() 
-                corr_pred_list = [1 if (predicted_labels[i, :] == labels[i,:]).all() else 0 for i in range(labels.shape[0])]
-                correct_predictions += np.sum(corr_pred_list)
-
+                predicted_labels = output.round()
 
                 predictions.append(output.data.cpu().numpy())
                 predicted_label.append(predicted_labels.cpu().numpy())
                 labels_list.append(labels.data.cpu().numpy())
 
                 count += 1
-            accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
+            # accuracy = 100.0 * correct_predictions / len(dataloader.dataset)
 
-        return predictions, predicted_label, labels_list, accuracy
+        return predictions, predicted_label, labels_list

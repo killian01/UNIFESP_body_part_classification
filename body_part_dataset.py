@@ -4,6 +4,7 @@ import numpy as np
 import SimpleITK as sitk
 from PIL import Image
 from skimage.exposure import rescale_intensity
+from sklearn import preprocessing
 
 
 class bodyPartDataset(data.Dataset):
@@ -13,6 +14,21 @@ class bodyPartDataset(data.Dataset):
         self.dir_list = dir_list
         self.transform = transform
         self.labels = labels
+        self._one_hot_enc_lab = []
+
+        for y in labels:
+            if len(y) == 1 or len(y) == 2:
+                self._one_hot_enc_lab.append([(int(y))])
+            else:
+                label = y[1:-1]
+                label_list = label.split(', ')
+                label_list = [int(lab) for lab in label_list]
+                self._one_hot_enc_lab.append(label_list)
+
+        lb = preprocessing.LabelBinarizer()
+        lb.fit(np.arange(0, 22, 1))
+        self._one_hot_enc_lab = [np.sum(lb.transform(lab), axis=0) if len(lab) > 1 else lb.transform(lab)[0]
+                                 for lab in self._one_hot_enc_lab]
 
     def __len__(self):
         return len(self.dir_list)
@@ -30,7 +46,7 @@ class bodyPartDataset(data.Dataset):
 
         img = np.repeat(img[...], 3, 0)
         path = self.dir_list[idx]
-        values = self.labels[idx]
+        values = self._one_hot_enc_lab[idx]
         # value_iterator = iter(values_view)
         # label = next(value_iterator)
         
